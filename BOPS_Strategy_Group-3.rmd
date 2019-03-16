@@ -1,0 +1,1073 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+title: "Project-BOPS Implemetation Impact on online sales and returns and across various prodcut categories"
+author: "Pooja Pawar,Sadhvi Isanaka ,Alishia Dsouza"
+output: word_document
+---
+
+#==========================================================
+## SET UP R MARKDOWN
+#==========================================================
+```{r}
+# You should generally clear the working space at the start of every R session
+rm(list = ls())
+
+# Set the directory
+setwd("C:/Econ-R/Project")
+# Install/Load the required libraries 
+# run these only once
+install.packages("stargazer") 
+install.packages("ggplot2")
+install.packages("gdata")
+install.packages("ggeffects")
+install.packages("QuantPsyc")
+install.packages("VIF")
+install.packages("lmtest")
+install.packages("AER")
+install.packages("readstata13")
+install.packages("dplyr")
+install.packages("sqldf")
+install.packages("msm")
+install.packages("psych")
+install.packages("ggeffects")
+install.packages("nnet")
+install.packages("reshape2")
+# Load libraries everytime you start a session
+library(nnet)
+library(reshape2)
+library(ggeffects)
+library(msm)
+library(psych)
+library(sqldf)
+library(dplyr)
+library(stargazer)
+library(gdata)
+library(ggplot2)
+library(psych) 
+library(ggeffects)
+library(QuantPsyc)
+library(VIF)
+library(usdm)
+library(lmtest)
+library(sandwich)
+library(AER)
+library(foreign)
+library(readstata13)
+# turn off scientific notation except for big numbers. 
+options(scipen = 9)
+```
+
+#==============================================================================================
+##        Q.1 Impact of implementing BOPS strategy on online channel sales
+#==============================================================================================
+```{r}
+online_daily_sales = read.dta13("online daily sales-returns data.dta")
+
+stargazer(online_daily_sales, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1A"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))  
+
+
+```
+
+#==========================================================
+## BUILD-UP MODEL
+#==========================================================
+```{r}
+
+
+#Replacing Null values with mean
+online_daily_sales1 <- online_daily_sales
+for(i in 1:ncol(online_daily_sales1)){
+  mydata1[is.na(online_daily_sales1 [,i]), i] <- mean(online_daily_sales1 [,i], na.rm = TRUE)
+}
+
+#Multicollenearity
+df = online_daily_sales[c('bops_in_effect','store_number','avg_female','avg_age','avg_income','avg_homeowner','avg_residency','avg_childowner','month_index','year','month_dummy','day')]
+cor(df) # Generates the correlation matrix
+vifcor(df, th = .99)#day,month_index and bops_in_effect are highly correlated
+
+df = online_daily_sales[c('bops_in_effect','store_number','avg_female','avg_age','avg_income','avg_homeowner','avg_residency','avg_childowner','month_dummy')]
+cor(df) # Generates the correlation matrix
+vifcor(df, th = .99)# 
+
+## 1. Histogram plots for checking log value of sales
+hist(online_daily_sales1$salesvalue)
+hist(log(online_daily_sales1$salesvalue))
+
+## Convert salesvalue to log
+online_daily_sales1$logsales<-ifelse(online_daily_sales$salesvalue<0,NA,log(online_daily_sales$salesvalue+1))
+stargazer(online_daily_sales1, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1A"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))  
+
+##creating grouping variable for bops store and time variable
+
+dailydata <- subset(online_daily_sales1, online_daily_sales1$day < 786)
+dailydata$bs <- ifelse((dailydata$store_number == 2 | dailydata$store_number == 6),1,0)
+dailydata$time <- ifelse((dailydata$day < 366),0,1)
+
+is.na(dailydata)
+
+## Run the OLS model
+model1_A=lm(logsales~(bs*time)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner+factor(month_dummy),data=dailydata)
+
+stargazer(model1_A, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))  # The coefficient of interaction term  is negative and significant, Implementation of BOPS strategy is associated with 48.07% decrease in dollar value of sales
+
+# Heteroskedasticity
+gqtest(model1_A)
+bptest(model1_A) #Significant Breusch-Pagan test indicates heteroscedasticity is present.
+
+consstder <- sqrt(diag(vcovHC(model1_A, type="const"))) # produces normal standard errors
+HWrobstder <- sqrt(diag(vcovHC(model1_A, type="HC1"))) # produces Huber-White robust standard errors 
+
+stargazer(model1_A, model1_A,  
+          se=list(consstder, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))# There is no change in significance in BOPS coefficient did not change after using HW robust standrad errors
+
+##===================================================Visualization==================================================================
+# 1. Interaction term effects on salesvalue
+meffects1 <- ggpredict(model1_A, terms=c("bs", "time")) # generates a tidy data frame  
+
+ggplot(meffects1,aes(x, predicted, colour=group)) + geom_line(size=1.3) + 
+  xlab("bs") + ylab("Sales")
+
+ggplot(meffects1,aes(x, predicted, colour=group)) + geom_line(size=1.3) + 
+  xlab("bs") + ylab("sales") +
+  labs(colour="time") + 
+  scale_colour_discrete(labels=c("No", "Yes")) +
+  theme(axis.title.x=element_text())# make the plot more self-readable
+#On observing the plot, the effect of having bops strategy on online sales is decreasing as compared to the previous period where bops functionality was not in place.
+
+
+
+##=========================================Binomial Model for SalesQuantity========================================================
+
+range(dailydata$salesquantity)
+## Convert salesvalue to log
+dailydata$logsalesquantity<-(dailydata$salesquantity)
+poisson1 <- glm(dailydata$logsalesquantity ~ (bs*time)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner+factor(month_dummy), family="poisson", data=dailydata)
+
+stargazer(poisson1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) # The coefficient for interaction term is insignificant here
+
+## Model fit assessment 
+poisson1a <- glm(logsalesquantity~1, data=dailydata, family="poisson") # This is the command to run a logit on null model 
+
+lrtest(poisson1, poisson1a) 
+
+negbin1 <- glm.nb(dailydata$logsalesquantity ~ (bs*time)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner+factor(month_dummy), data = dailydata) 
+
+
+
+# Model fit assessment
+
+negbin1a <- glm.nb(logsalesquantity ~ 1, data = dailydata) 
+lrtest(negbin1, negbin1a)# p value is sigificant, so the negative binomial model fits the data
+
+# Choosing between Poisson and Negative Binomial regressions
+lrtest(poisson1, negbin1) # The P-Value is significant ,hence negative binomial is best model
+# Choosing between Poisson and Negative Binomial regressions
+
+# Obtain IRRs
+stargazer(negbin1, 
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Regression Results", type="text", 
+          column.labels=c("IRRs"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))# The interaction term is positive and coefficient is significant,it imlies that implementation of BOPS strategy is associated with 33.11% decrease in salesquantities
+
+# Check for heteroscedasticity
+gqtest(negbin1) # Goldfeld-Quandt test indicates heteroscedasticity
+bptest(negbin1) # Breusch-Pagan test indicates heteroscedasticity
+
+HWrobstder <- sqrt(diag(vcovHC(negbin1, type="HC1"))) # produces Huber-White robust standard errors 
+
+stargazer(negbin1, negbin1,  
+          se=list(NULL, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))  
+
+
+
+##===========================================================================================================================
+#         Q.2 impact of implementing BOPS strategy on online channel returns?
+##=============================================================================================================================
+``{r}
+online_daily_sales_return = read.dta13("online daily sales-returns data.dta")
+
+is.na(online_daily_sales_return)
+##Replacing NA with mean
+online_daily_sales1 <- online_daily_sales_return
+for(i in 1:ncol(online_daily_sales1)){
+  mydata1[is.na(online_daily_sales1 [,i]), i] <- mean(online_daily_sales1 [,i], na.rm = TRUE)
+}
+
+## 1. Histogram plots
+hist(online_daily_sales$salesquantity)
+hist(log(online_daily_sales$salesquantity))
+
+## Creating grouping variable for bops_store and time
+dailyreturndata <- subset(online_daily_sales1, online_daily_sales1$day < 786)
+dailyreturndata$bs <- ifelse((dailyreturndata$store_number == 2 | dailyreturndata$store_number == 6),1,0)
+dailyreturndata$time <- ifelse((dailyreturndata$day < 366),0,1)
+
+##Data Cleanup 
+dailyreturndata$logsales<-ifelse(dailyreturndata$salesvalue<0,NA,log(dailyreturndata$salesvalue+1))
+dailyreturndata$logsalesquantity <- log(dailyreturndata$salesquantity)
+dailyreturndata$logreturns<-ifelse(dailyreturndata$returnvalue<0,NA,log(dailyreturndata$returnvalue+1))
+
+##Checking Multicollinearity
+df = dailyreturndata[c('bops_in_effect','store_number','avg_female','avg_age','avg_income','avg_homeowner','avg_residency','avg_childowner')]
+cor(df) # Generates the correlation matrix
+vifcor(df, th = .99)
+
+df = dailyreturndata[c('bops_in_effect','store_number','avg_female','avg_age','avg_income','avg_homeowner','avg_residency','avg_childowner','month_dummy','month_index','logsales','salesquantity')]
+cor(df) # Generates the correlation matrix
+vifcor(df, th = .99)# day,month_index and bops_in_effect are highly correlated
+
+
+## Running OLS Model
+model2_A=lm(logreturns~(time*bs)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner+factor(month_dummy)+logsales,data=dailyreturndata)
+
+stargazer(model2_A, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))  # The coefficient of interaction term is negative and significant, implying a stores not having bops strategy is associated with a 55.14% decrease in returns 
+
+# Heteroskedasticity
+gqtest(model2_A)
+bptest(model2_A) #Significant Breusch-Pagan test indicates heteroscedasticity is present.
+
+consstder <- sqrt(diag(vcovHC(model2_A, type="const"))) # produces normal standard errors
+HWrobstder <- sqrt(diag(vcovHC(model2_A, type="HC1"))) # produces Huber-White robust standard errors 
+
+stargazer(model2_A,  
+          se=list(consstder, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))
+
+
+
+##====================================Binomial model for Return Quantity==========================================================
+
+
+range(dailyreturndata$returnquantity)
+
+poisson1 <- glm(dailyreturndata$returnquantity ~ (bs*time)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner+factor(month_dummy)+logsales, family="poisson", data=dailyreturndata)
+
+stargazer(poisson1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) # The coefficient for interaction term is insignificant 
+
+## Model fit assessment 
+poisson1a <- glm(returnquantity~1, data=dailyreturndata, family="poisson") # This is the command to run a logit on null model 
+
+lrtest(poisson1, poisson1a) 
+
+negbin1 <- glm.nb(dailyreturndata$returnquantity ~ (bs*time)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner+factor(month_dummy)+logsales, data = dailyreturndata) 
+
+stargazer(negbin1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+# Choosing between Poisson and Negative Binomial regressions
+
+lrtest(poisson1, negbin1) # The P-Value is significant 
+
+# Obtain IRRs
+stargazer(negbin1, 
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Regression Results", type="text", 
+          column.labels=c("IRRs"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001)) # The coefficient of interaction term is significant and positive and it implies that implementation of BOPS strategy is associated with 26.52% decrease in Return quantities.
+
+# Check for heteroscedasticity
+gqtest(negbin1) # Goldfeld-Quandt test indicates heteroscedasticity
+bptest(negbin1) # Breusch-Pagan test indicates heteroscedasticity
+
+HWrobstder <- sqrt(diag(vcovHC(negbin1, type="HC1"))) # produces Huber-White robust standard errors 
+
+stargazer(negbin1, negbin1,  
+          se=list(NULL, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+
+
+##========================================Visualiztion=================================================================
+# 1. Interaction term effects on warranty purchase
+meffects1 <- ggpredict(model2_A, terms=c("bs", "time")) # generates a tidy data frame  
+
+ggplot(meffects1,aes(x, predicted, colour=group)) + geom_line(size=1.3) + 
+  xlab("bs") + ylab("Returns")
+
+ggplot(meffects1,aes(x, predicted, colour=group)) + geom_line(size=1.3) + 
+  xlab("bs") + ylab("Returns") +
+  labs(colour="time") + 
+  scale_colour_discrete(labels=c("No", "Yes")) +
+  theme(axis.title.x=element_text())# make the plot more self-readable
+#On observing the plot, the effect of implementation of bops strategy decreases the returns 
+
+
+
+##===========================================================================================================================
+#                Q.3 Impact of using BOPS service on Consumer Purchase Behaviour
+##=============================================================================================================================
+
+consumer_level_data = read.dta13("consumer level data.dta")
+
+## converting NA to mean values
+mydata_consumer1 <- consumer_level_data
+for(i in 1:ncol(mydata_consumer1)){
+  mydata_consumer1[is.na(mydata_consumer1[,i]), i] <- mean(mydata_consumer1[,i], na.rm = TRUE)
+}
+
+## Cleaning up data
+mydata_consumer1$logsales<-ifelse(mydata_consumer1$salesvalue<0,NA,log(mydata_consumer1$salesvalue+1))
+mydata_consumer1$child1<-ifelse(mydata_consumer1$child=="Y",1,0)
+mydata_consumer1$homeowner_num = ifelse(mydata_consumer1$homeowner_code == 'O', 1,0)
+
+stargazer(consumer_level_data, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))
+
+##Checking Multicollinearity
+df = mydata_consumer1[c('store_number','bops_user','age_band','female','est_income_code','length_of_residence','bops_in_effect','salesvalue','salesquantity','purchase_time_period')]
+cor(df) # Generates the correlation matrix
+vifcor(df, th = .99)
+
+##Running OLS Model
+
+model3_A=lm(logsales~(bops_user*bops_in_effect)+age_band+female+est_income_code+length_of_residence+purchase_time_period+child1+homeowner_num,data=mydata_consumer1)
+
+stargazer(model3_A,
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))  # The coefficient of interaction term is negative and significant, implying a not using bops service is associated with a 5.16% decrease in salesvalue 
+
+
+# Heteroskedasticity
+gqtest(model3_A)
+bptest(model3_A) #Significant Breusch-Pagan test indicates heteroscedasticity is present.
+
+consstder <- sqrt(diag(vcovHC(model3_A, type="const"))) # produces normal standard errors
+HWrobstder <- sqrt(diag(vcovHC(model3_A, type="HC1"))) # produces Huber-White robust standard errors 
+
+stargazer(model3_A, model3_A,  
+          se=list(consstder, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))
+
+
+##===========================================Binomial model for Quantity===================================
+
+range(mydata_consumer1$salesquantity)
+
+poisson1 <- glm(mydata_consumer1$salesquantity ~(bops_user*bops_in_effect)+age_band+female+est_income_code+length_of_residence+purchase_time_period+child1+homeowner_num,family="poisson", data=mydata_consumer1)
+
+stargazer(poisson1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) # The coefficient for interaction term is insignificant 
+
+## Model fit assessment 
+poisson1a <- glm(salesquantity~1, data=mydata_consumer1, family="poisson") # This is the command to run a logit on null model 
+
+lrtest(poisson1, poisson1a) 
+
+negbin1 <- glm.nb(mydata_consumer1$salesquantity ~(bops_user*bops_in_effect)+age_band+female+est_income_code+length_of_residence+purchase_time_period+child1+homeowner_num, data = mydata_consumer1) 
+
+stargazer(negbin1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+
+# Choosing between Poisson and Negative Binomial regressions
+
+lrtest(poisson1, negbin1) # The P-Value is significant ,hence negative binomial is best model
+
+# Obtain IRRs
+stargazer(negbin1, 
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Regression Results", type="text", 
+          column.labels=c("IRRs"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))## Coefficient of interaction term is positive and significant and it indicates that implementation of BOPS strategy is associated with 4.05% decrease in sales quantities.
+
+# Check for heteroscedasticity
+gqtest(negbin1) # Goldfeld-Quandt test indicates heteroscedasticity
+bptest(negbin1) # Breusch-Pagan test indicates heteroscedasticity
+
+HWrobstder <- sqrt(diag(vcovHC(negbin1, type="HC1"))) # produces Huber-White robust standard errors 
+
+stargazer(negbin1, negbin1,  
+          se=list(NULL, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+
+##====================================================Visualization==================================================================
+# 1. Interaction term effects on warranty purchase
+meffects1 <- ggpredict(model3_A, terms=c("bops_user", "bops_in_effect")) # generates a tidy data frame  
+
+ggplot(meffects1,aes(x, predicted, colour=group)) + geom_line(size=1.3) + 
+  xlab("bops_service") + ylab("Sales")
+
+ggplot(meffects1,aes(x, predicted, colour=group)) + geom_line(size=1.3) + 
+  xlab("bops_service") + ylab("Sales") +
+  labs(colour="bops_in_effect") + 
+  scale_colour_discrete(labels=c("No", "Yes")) +
+  theme(axis.title.x=element_text())# make the plot more self-readable
+#On observing the plot, the effect of using bops services leads to decrease in salesvalue
+
+##========================Q.4 impact of using the BOPS service ononline customer return behavior? ==========================
+
+transactionleveldata <- read.dta13("C:/Econ-R/Project/transaction level data.dta")
+
+## Summary statistics
+stargazer(transactionleveldata, type="text", median=TRUE, iqr=TRUE,digits=1, title="Descriptive Statistics")  
+
+```
+#==========================================================
+## Replace values for 'child' and 'homeowner_code' with 0s and 1s
+#==========================================================
+```{r}
+transactionleveldata$child_num = ifelse(transactionleveldata$child == 'Y', 1,0)
+transactionleveldata$homeowner_num = ifelse(transactionleveldata$homeowner_code == 'O', 1,0)
+```
+#==========================================================
+## Omitting null value records
+#==========================================================
+```{r}
+transactionleveldata1 <- na.omit(transactionleveldata)
+stargazer(transactionleveldata1, type="text", median=TRUE, iqr=TRUE,digits=1, title="Descriptive Statistics")
+```
+#==========================================================
+## Checking for Multicolleneraity
+#==========================================================
+```{r}
+df <- transactionleveldata1[c('store_number','price','age_band','est_income_code','length_of_residence',
+                     'month_index','product_category','month_dummy','week_index','bops','female','child_num','homeowner_num')]
+cor(df) # Generates the correlation matrix
+vifcor(df, th = .99)
+```
+#==========================================================
+## Building the Model
+#==========================================================
+```{r}
+
+logit1 <- glm(return~bops+age_band+price+female+est_income_code+length_of_residence+child_num+homeowner_num+
+                week_index + factor(month_dummy) , data=transactionleveldata1, family = "binomial")
+stargazer( logit1, 
+           title="Regression Results", type="text", 
+           column.labels=c("logit-1"),
+           df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+# Model fit assessment for logit
+
+null <- glm(return~1, data=transactionleveldata1, family="binomial") 
+# This is the command to run a logit on null model 
+lrtest(null, logit1) #
+#We compare the null model to our model to determine the model fit. The chi-square of 41.46 with 5 degrees of freedom and an associated p-value of less than 0.001 tells us that our model as a whole fits significantly better than the null model.
+
+# Obtaining Marginal effects
+a <- logitmfx(formula=return~bops+age_band+price+female+est_income_code+length_of_residence+child_num+homeowner_num + week_index + factor(month_dummy) , data=transactionleveldata1) 
+
+marginaleffects <- a$mfxest[,1]
+marg.std.err <- a$mfxest[,2]
+
+stargazer(logit1, 
+          omit=c("Constant"),
+          coef = list(marginaleffects), se = list(marg.std.err),
+          title="Regression Results", type="text", 
+          column.labels=c("Marginal Effects"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))
+
+# Comparing OLS with logit marginal effects model to see if the co-effecients and standard errors are similar
+stargazer(logit1,ols, 
+          omit=c("Constant"),
+          coef = list(marginaleffects), se = list(marg.std.err),
+          title="Regression Results", type="text", 
+          column.labels=c("Marginal Effects", "ols"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001)) 
+# The coefficients and standard errors are similar so we can use the 2SLS model to address endogeneity
+
+
+# Addressing Endogeneity
+model1<- ivreg(return ~ age_band+bops+price+female+est_income_code+factor(product_category)+
+                 week_index + factor(month_dummy)| 
+                 product_category+age_band+price+female+factor(product_category)+est_income_code+length_of_residence+
+                 child_num+homeowner_num+
+                 week_index + factor(month_dummy), data=transactionleveldata1) 
+summary(model1, diagnostics = TRUE)
+df2 <- transactionleveldata1[c('child_num','homeowner_num','length_of_residence','return')]
+cor(df2) # Out of 3 instruments homeowner_num is highly significant, so we exclude the variable and test again
+
+# Final Model
+model2<- ivreg(return ~ bops+age_band+price+female+est_income_code+factor(product_category)+
+                 week_index + factor(month_dummy)| 
+                 product_category+age_band+price+female+factor(product_category)+est_income_code+length_of_residence+
+                 child_num+
+                 week_index + factor(month_dummy), data=transactionleveldata1) 
+summary(model2, diagnostics = TRUE) # This time we get insignificant sargan test and significantp-value for Hausman 
+
+stargazer( model2, 
+           title="Regression Results", type="text", 
+           column.labels=c("Model-2"),
+           df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+```
+
+#==========================================================
+## Checking for Heteroskedasticity
+#==========================================================
+```{r}
+# Checking for Heteroskedacity
+gqtest(model2)  
+bptest(model2) #Significant Breusch-Pagan test  indicates heteroscedasticity
+
+consstder <- sqrt(diag(vcovHC(model2, type="const"))) # produces normal standard errors
+HWrobstder <- sqrt(diag(vcovHC(model2, type="HC1"))) # produces Huber-White robust standard errors 
+
+stargazer(model2, model2,  
+          se=list(consstder, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))  # displays normal/HW robust/clustered robust standard errors. With clustered robust standard errors, we find that two variables are no longer significant
+# There is no change in significance in BOPS coefficient did not change after using HW robust standard errors
+
+## Measuring the predictive power of the logit
+pred = predict(model2, data=transactionleveldata1,type = "response") # Let's generate predicted probabilities
+
+return_prediction <- ifelse(pred >= 0.5,1,0)  
+misClasificError <- mean(return_prediction != transactionleveldata1$return)
+print(paste('Accuracy',1-misClasificError)) 
+table(transactionleveldata1$return, pred>=0.5) 
+
+##===================Q.5 mpact of implementing BOPS strategy on product-level sales and returns======================================
+
+onlinedaily_prod<- read.dta13("C:/Econ-R/Project/online daily prod_cat sales-returns data.dta")
+
+## Summary statistics
+stargazer(onlinedaily_prod, type="text", median=TRUE, iqr=TRUE,digits=1, title="Descriptive Statistics")  
+
+mydata$factor_disc = as.factor(mydata$discountperc)
+ggplot(mydata, aes(x=factor_disc, y=sales_quantity, fill=factor_disc)) + geom_boxplot() + 
+  xlab("Discount percentage") + ylab("Sales quantity") 
+
+ggplot(onlinedaily_prod, aes(x=salesvalue)) + geom_histogram(colour="green")
+ggplot(onlinedaily_prod, aes(x=log(salesvalue))) + geom_histogram(colour="green")
+# As the distribution of raw variable is skewed we need to use log of salesvalue
+
+# creating log of salesvalue in the dataframe
+onlinedaily_prod$logsalesvalue <- ifelse(onlinedaily_prod$salesvalue < 0,NA,log(onlinedaily_prod$salesvalue+1))
+```
+#==========================================================
+## Replacing null values with mean value
+#==========================================================
+```{r}
+onlinedaily_prod1 <- onlinedaily_prod
+for(i in 1:ncol(onlinedaily_prod1)){
+  onlinedaily_prod1[is.na(onlinedaily_prod1[,i]), i] <- mean(onlinedaily_prod1[,i], na.rm = TRUE)
+}
+stargazer(onlinedaily_prod1, type="text", median=TRUE, iqr=TRUE,digits=1, title="Descriptive Statistics")
+```
+#==========================================================
+## Creating time variable for BIE =0/1 and grouping variable for bops store bs = 0/1 and subseting data to 2010-2012
+#==========================================================
+```{r}
+onlinedaily_prod1 <- subset(onlinedaily_prod, onlinedaily_prod$day < 786)
+onlinedaily_prod1$bops_store <- ifelse((onlinedaily_prod1$store_number == 2 | onlinedaily_prod1$store_number == 6),1,0)
+onlinedaily_prod1$time <- ifelse((onlinedaily_prod1$day < 366),0,1)
+```
+#==========================================================
+## Checking for Multicolleneraity
+#==========================================================
+```{r}
+q5 <- onlinedaily_prod1[c("store_number","month_dummy","bops_in_effect",
+                             "avg_female","avg_age","avg_homeowner","product_category",
+                             "avg_income","avg_residency","avg_childowner")]
+cor(d5)
+vifcor(q5, th = .99)
+
+#Checking for log
+ggplot(onlinedaily_prod1, aes(x=salesvalue)) + geom_histogram(colour="green") 
+ggplot(onlinedaily_prod1, aes(x=log(salesvalue))) + geom_histogram(colour="green")# we use log of salesvalue as the salesvalue distrubution is skewed
+
+ggplot(onlinedaily_prod1, aes(x=returnvalue)) + geom_histogram(colour="green") 
+ggplot(onlinedaily_prod1, aes(x=log(returnvalue))) + geom_histogram(colour="green")# we use log of returnvalue as the returnvalue distrubution is skewed
+
+onlinedaily_prod1$logsalesvalue <- ifelse(onlinedaily_prod1$salesvalue < 0,NA,log(onlinedaily_prod1$salesvalue+1))
+onlinedaily_prod1$logreturnvalue <- ifelse(onlinedaily_prod1$returnvalue < 0,NA,log(onlinedaily_prod1$returnvalue+1))
+```
+
+#==========================================================
+## Building the Model
+#==========================================================
+```{r}
+#Sales Value
+model1 = lm(logsalesvalue ~  store_number+factor(month_dummy)+ time*bops_store + factor(product_category) + 
+              avg_female + avg_age + 
+              avg_homeowner + avg_income + avg_residency + avg_childowner, data = onlinedaily_prod1)
+
+stargazer( model1, 
+           title="Regression Results", type="text", 
+           column.labels=c("Model-1"),
+           df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+# Checking for Heteroskedasticity
+gqtest(model1) # Significant Goldfeld-Quandt test indicates heteroscedasticity 
+bptest(model1) # Significant Breusch-Pagan test  indicates heteroscedasticity
+
+consstder <- sqrt(diag(vcovHC(model1, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(model1, type="HC1"))) 
+
+stargazer(model1, model1,  
+          se=list(consstder, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+# There is no change in significance in BOPS coefficient did not change after using HW robust standrad errors
+
+
+
+# Return Value---------------------------------------------------------------------------------------------------
+model2 = lm(logreturnvalue ~  store_number+factor(month_dummy)+ logsalesvalue + salesquantity +
+              time*bops_store + factor(product_category) + 
+              avg_female + avg_age + 
+              avg_homeowner + avg_income + avg_residency + avg_childowner, data = onlinedaily_prod1)
+
+stargazer( model2, 
+           title="Regression Results", type="text", 
+           column.labels=c("Model-1"),
+           df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+# Checking for Heteroskedasticity
+gqtest(model2) # Significant Goldfeld-Quandt test indicates heteroscedasticity 
+bptest(model2) # Significant Breusch-Pagan test  indicates heteroscedasticity
+
+consstder <- sqrt(diag(vcovHC(model2, type="const"))) # produces normal standard errors
+HWrobstder <- sqrt(diag(vcovHC(model2, type="HC1"))) # produces Huber-White robust standard errors 
+#clusrobstder <- sqrt(diag(cluster.vcov(model2, mydata$Region))) # produces clustered robust standard errors
+
+stargazer(model2, model2,  
+          se=list(consstder, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))  # displays normal/HW robust/clustered robust standard errors. With clustered robust standard errors, we find that two variables are no longer significant
+# There is no change in significance in BOPS coefficient did not change after using HW robust standrad errors
+
+
+----------------------------------------------------------------------------------------------------------
+ #Sales Quantity
+
+range(onlinedaily_prod1$salesquantity)
+
+poisson1 <- glm(salesquantity ~  store_number+factor(month_dummy)+ time*bops_store + factor(product_category) + 
+                  avg_female + avg_age + 
+                  avg_homeowner + avg_income + avg_residency + avg_childowner, data = onlinedaily_prod1)
+
+stargazer(poisson1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) # The coefficient for interaction term is insignificant 
+
+## Model fit assessment 
+poisson1a <- glm(salesquantity~1, data=onlinedaily_prod1, family="poisson") # This is the command to run a logit on null model 
+
+lrtest(poisson1, poisson1a) #significant, hence model doe not fit the data
+
+negbin1 <- glm.nb(salesquantity ~  store_number+factor(month_dummy)+ time*bops_store + factor(product_category) + 
+                    avg_female + avg_age + 
+                    avg_homeowner + avg_income + avg_residency + avg_childowner, data = onlinedaily_prod1) 
+
+#Model fit assessment
+negbin1a <- glm.nb(salesquantity ~ 1, data = onlinedaily_prod1)
+
+lrtest(negbin1, negbin1a)# p value is sigificant, so the negative binomial model fits the data
+
+# Choosing between Poisson and Negative Binomial regressions
+lrtest(poisson1, negbin1) # The P-Value is significant ,hence negative binomial is best model
+
+stargazer(negbin1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+#IRR
+stargazer(negbin1, 
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Regression Results", type="text", 
+          column.labels=c("IRRs"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))
+
+------------------------------------------------------------------------------------------------------------
+# Return quantity
+
+range(onlinedaily_prod1$returnquantity)
+
+poisson1 <- glm(returnquantity ~  store_number+factor(month_dummy)+ time*bops_store + factor(product_category) + 
+                  avg_female + avg_age + 
+                  avg_homeowner + avg_income + avg_residency + avg_childowner, data = onlinedaily_prod1)
+
+stargazer(poisson1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+## Model fit assessment 
+poisson1a <- glm(returnquantity~1, data=onlinedaily_prod1, family="poisson") # This is the command to run a logit on null model 
+
+lrtest(poisson1, poisson1a) #P value is significant, hence poisson model does not fit the data
+
+negbin1 <- glm.nb(returnquantity ~  store_number+factor(month_dummy)+ time*bops_store + factor(product_category) + 
+                    avg_female + avg_age + 
+                    avg_homeowner + avg_income + avg_residency + avg_childowner, data = onlinedaily_prod1) 
+
+#Model fit assessment
+negbin1a <- glm.nb(returnquantity ~ 1, data = onlinedaily_prod1)
+lrtest(negbin1, negbin1a)# p value is sigificant, binomial model fits the data
+
+
+# Choosing between Poisson and Negative Binomial regressions
+lrtest(poisson1, negbin1) # The P-Value is significant ,hence negative binomial is best model
+
+stargazer(negbin1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+#IRR
+stargazer(negbin1, 
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Regression Results", type="text", 
+          column.labels=c("IRRs"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))
+
+
+
+
+##===============Q. 6 How does the impact of implementing BOPS strategy vary across product categories?========================
+
+
+#Impact of BOPS varying across product-categories:
+is.factor(onlinedaily_prod1$product_category)
+onlinedaily_prod1$factor_product_category <- as.factor(onlinedaily_prod1$product_category)
+
+Model7 = lm(logsalesvalue~bopsstore*time*factor_product_category+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner+store_number , data=onlinedaily_prod1)
+
+stargazer(Model7, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-5"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 1: Bridal
+mydatapc1 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='1')
+Modelpc1 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc1)
+stargazer(Modelpc1, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc1)
+bptest(Modelpc1)  #p-value is significant
+consstder <- sqrt(diag(vcovHC(Modelpc1, type="const"))) #std errors
+HWrobstder <- sqrt(diag(vcovHC(Modelpc1, type="HC1"))) #robust std errors
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc1, mydatapc1$store_number))) #cluster robust std errors
+stargazer(Modelpc1,  Modelpc1,Modelpc1,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 2: Gold Wed Bands
+mydatapc2 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='2')
+Modelpc2 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc2)
+stargazer(Modelpc2, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC2"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc2)
+bptest(Modelpc2) 
+consstder <- sqrt(diag(vcovHC(Modelpc2, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc2, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc2, mydatapc2$store_number)))
+stargazer(Modelpc2,  Modelpc2, Modelpc2,
+          se=list(consstder, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 3: Solitaires
+mydatapc3 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='3')
+Modelpc3 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc3)
+stargazer(Modelpc3, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC3"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc3)
+bptest(Modelpc3) 
+consstder <- sqrt(diag(vcovHC(Modelpc3, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc3, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc3, mydatapc3$store_number)))
+stargazer(Modelpc3,  Modelpc3, Modelpc3,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 4: Diamond Fashion
+mydatapc4 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='4')
+Modelpc4 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc4)
+stargazer(Modelpc4, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC4"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc4)
+bptest(Modelpc4) 
+consstder <- sqrt(diag(vcovHC(Modelpc4, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc4, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc4, mydatapc4$store_number)))
+stargazer(Modelpc4,  Modelpc4, Modelpc4,
+          se=list(consstder, HWrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 5: Semi Precious
+mydatapc5 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='5')
+Modelpc5 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc5)
+stargazer(Modelpc5, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC5"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc5)
+bptest(Modelpc5) 
+consstder <- sqrt(diag(vcovHC(Modelpc5, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc5, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc5, mydatapc5$store_number)))
+stargazer(Modelpc5,  Modelpc5, Modelpc5,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 6: Mens
+mydatapc6 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='6')
+Modelpc6 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc6)
+stargazer(Modelpc6, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC6"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc6)
+bptest(Modelpc6) 
+consstder <- sqrt(diag(vcovHC(Modelpc6, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc6, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc6, mydatapc6$store_number)))
+stargazer(Modelpc6,  Modelpc6,Modelpc6,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 7: Gold Earrings
+mydatapc7 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='7')
+Modelpc7 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc7)
+stargazer(Modelpc7, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC7"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc7)
+bptest(Modelpc7) 
+consstder <- sqrt(diag(vcovHC(Modelpc7, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc7, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc7, mydatapc7$store_number)))
+stargazer(Modelpc7,  Modelpc7,Modelpc7,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 8: In House Special Event
+mydatapc8 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='8')
+Modelpc8 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc8)
+stargazer(Modelpc8, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC8"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 9: Beads
+mydatapc9 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='9')
+Modelpc9 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc9)
+stargazer(Modelpc9, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC9"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc9)
+bptest(Modelpc9) 
+consstder <- sqrt(diag(vcovHC(Modelpc9, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc9, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc9, mydatapc9$store_number)))
+stargazer(Modelpc9,  Modelpc9,Modelpc9,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 10: Piercings / Close Out
+mydatapc10 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='10')
+Modelpc10 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc10)
+stargazer(Modelpc10, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC10"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 11: Diamond Solitaires Jewelry
+mydatapc11 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='11')
+Modelpc11 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc11)
+stargazer(Modelpc11, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC11"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc11)
+bptest(Modelpc11) 
+consstder <- sqrt(diag(vcovHC(Modelpc11, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc11, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc11, mydatapc11$store_number)))
+stargazer(Modelpc11,  Modelpc11, Modelpc11,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 12: Gold Chain / Jewelry
+mydatapc12 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='12')
+Modelpc12 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc12)
+stargazer(Modelpc12, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC12"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc12)
+bptest(Modelpc12) 
+consstder <- sqrt(diag(vcovHC(Modelpc12, type="const"))) 
+
+HWrobstder <- sqrt(diag(vcovHC(Modelpc12, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc12, mydatapc12$store_number)))
+stargazer(Modelpc12,  Modelpc12, Modelpc12,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 13: Watches 
+mydatapc13 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='13')
+Modelpc13 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc13)
+stargazer(Modelpc13, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC13"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc13)
+bptest(Modelpc13) 
+consstder <- sqrt(diag(vcovHC(Modelpc13, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc13, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc13, mydatapc13$store_number)))
+stargazer(Modelpc13,  Modelpc13, Modelpc13,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 14: Pre-Owned 
+mydatapc14 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='14')
+Modelpc14 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc14)
+stargazer(Modelpc14, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC14"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc14)
+bptest(Modelpc14) 
+consstder <- sqrt(diag(vcovHC(Modelpc14, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc14, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc14, mydatapc14$store_number)))
+stargazer(Modelpc14,  Modelpc14, Modelpc14,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 15: Specialized Jewelry
+mydatapc15 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='15')
+Modelpc15 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc15)
+stargazer(Modelpc15, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC15"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 16: Estate
+mydatapc16 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='16')
+
+#Product-category 17: Events
+mydatapc17 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='17')
+Modelpc17 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc17)
+stargazer(Modelpc17, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC17"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 18: Trade Ins
+mydatapc18 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='18')
+
+#Product-category 19: Repair / Warranty
+mydatapc19 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='19')
+
+#Product-category 20: Diamond Wedding Band
+mydatapc20 <- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='20')
+Modelpc20 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc20)
+stargazer(Modelpc20, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC20"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc20)
+bptest(Modelpc20) 
+consstder <- sqrt(diag(vcovHC(Modelpc20, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc20, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc20, mydatapc1$store_number)))
+stargazer(Modelpc20,  Modelpc20,Modelpc20,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Product-category 21: Sterling Silver
+mydatapc21<- subset(onlinedaily_prod1, onlinedaily_prod1$product_category=='21')
+Modelpc21 = lm(logsalesvalue~bops_store*time+factor(month_dummy)+avg_female+avg_age+avg_income+avg_homeowner+avg_residency+avg_childowner , data=mydatapc21)
+stargazer(Modelpc21, 
+          title="Regression Results", type="text", 
+          column.labels=c("Model-PC21"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+gqtest(Modelpc21)
+bptest(Modelpc21) 
+consstder <- sqrt(diag(vcovHC(Modelpc21, type="const"))) 
+HWrobstder <- sqrt(diag(vcovHC(Modelpc21, type="HC1")))
+clusrobstder <- sqrt(diag(cluster.vcov(Modelpc21, mydatapc1$store_number)))
+stargazer(Modelpc21,  Modelpc21,Modelpc21,
+          se=list(consstder, HWrobstder,clusrobstder),
+          title="Regression Results", type="text", 
+          column.labels=c("Normal SE", "HW-Robust SE","Cluster SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+```
